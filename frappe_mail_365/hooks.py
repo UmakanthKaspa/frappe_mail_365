@@ -172,6 +172,7 @@ before_uninstall = "frappe_mail_365.setup.uninstall.before_uninstall"
 # Specify custom mixins to extend the standard doctype controller.
 extend_doctype_class = {
     "Email Account": "frappe_mail_365.overrides.email_account.Mail365EmailAccount",
+    "Email Queue": "frappe_mail_365.overrides.email_queue.Mail365EmailQueue",
 }
 
 # Overriding Methods

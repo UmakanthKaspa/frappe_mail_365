@@ -7,6 +7,7 @@ from frappe.email.doctype.email_account.email_account import EmailAccount
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 GRAPH_INBOX_URL = f"{GRAPH_API_BASE}/me/mailFolders/inbox/messages"
+GRAPH_SEND_URL = f"{GRAPH_API_BASE}/me/sendMail"
 REQUEST_TIMEOUT = 30
 
 
@@ -236,7 +237,6 @@ class Mail365EmailAccount(EmailAccount):
         has_attachments = msg.get("hasAttachments", False)
         mail = MIMEMultipart("mixed" if has_attachments else "alternative")
 
-        # From
         from_data = msg.get("from", {}).get("emailAddress", {})
         if from_data.get("address"):
             mail["From"] = email.utils.formataddr((
@@ -244,7 +244,6 @@ class Mail365EmailAccount(EmailAccount):
                 from_data.get("address")
             ))
 
-        # To
         to_list = msg.get("toRecipients", [])
         if to_list:
             to_addrs = []
@@ -258,7 +257,6 @@ class Mail365EmailAccount(EmailAccount):
             if to_addrs:
                 mail["To"] = ", ".join(to_addrs)
 
-        # CC
         cc_list = msg.get("ccRecipients", [])
         if cc_list:
             cc_addrs = []
@@ -272,21 +270,17 @@ class Mail365EmailAccount(EmailAccount):
             if cc_addrs:
                 mail["CC"] = ", ".join(cc_addrs)
 
-        # Subject
         mail["Subject"] = msg.get("subject") or "No Subject"
 
-        # Message-ID
         msg_id = msg.get("internetMessageId", "")
         if msg_id:
             if not msg_id.startswith("<"):
                 msg_id = f"<{msg_id}>"
             mail["Message-ID"] = msg_id
 
-        # Date
         if msg.get("receivedDateTime"):
             mail["Date"] = msg["receivedDateTime"]
 
-        # Body
         body_data = msg.get("body", {})
         content = body_data.get("content", "")
         content_type = body_data.get("contentType", "HTML").lower()
@@ -298,7 +292,6 @@ class Mail365EmailAccount(EmailAccount):
 
         mail.attach(body_part)
 
-        # Attachments
         if has_attachments:
             self._add_attachments(mail, msg.get("id"), access_token)
 
@@ -346,3 +339,123 @@ class Mail365EmailAccount(EmailAccount):
                 reference_doctype="Email Account",
                 reference_name=self.name
             )
+
+    def send_via_graph_api(self, email_data):
+        """Send email via Microsoft 365 Graph API."""
+        if not self.enable_outgoing:
+            frappe.throw(_("Outgoing email not enabled for this account."))
+
+        token_doc = self._get_oauth_token()
+        if not token_doc:
+            frappe.throw(_("Could not get OAuth token. Please re-authorize the Connected App."))
+
+        access_token = token_doc.get_password("access_token")
+
+        return self._send_new_email(email_data, access_token)
+
+    def _send_new_email(self, email_data, access_token):
+        """Send new email via Graph API POST /me/sendMail."""
+        message = {
+            "message": {
+                "subject": email_data.get("subject") or "No Subject",
+                "body": {
+                    "contentType": "HTML",
+                    "content": email_data.get("message") or ""
+                },
+                "toRecipients": self._build_recipients(email_data.get("recipients", ""))
+            },
+            "saveToSentItems": "true"
+        }
+
+        if email_data.get("cc"):
+            message["message"]["ccRecipients"] = self._build_recipients(email_data["cc"])
+
+        if email_data.get("attachments"):
+            attachments_list = self._build_attachments_for_send(email_data["attachments"])
+            if attachments_list:
+                message["message"]["attachments"] = attachments_list
+
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(
+            GRAPH_SEND_URL,
+            headers=headers,
+            json=message,
+            timeout=REQUEST_TIMEOUT
+        )
+
+        if response.status_code != 202:
+            frappe.log_error(
+                title="Mail 365: Send Error",
+                message=f"Status: {response.status_code}\n{response.text}",
+                reference_doctype="Email Account",
+                reference_name=self.name
+            )
+            response.raise_for_status()
+
+        return True
+
+    def _build_recipients(self, recipients_str):
+        """Convert recipient string to Graph API format."""
+        from frappe.utils import parse_addr
+
+        if not recipients_str:
+            return []
+
+        recipients = []
+        for recipient in recipients_str.split(","):
+            recipient = recipient.strip()
+            if recipient:
+                name, email_addr = parse_addr(recipient)
+                recipients.append({
+                    "emailAddress": {
+                        "address": email_addr or recipient,
+                        "name": name or ""
+                    }
+                })
+
+        return recipients
+
+    def _build_attachments_for_send(self, attachments_json):
+        """Convert Frappe attachments to Graph API format (base64)."""
+        import base64
+
+        if not attachments_json:
+            return []
+
+        try:
+            attachments = frappe.parse_json(attachments_json)
+            if not isinstance(attachments, list):
+                return []
+
+            graph_attachments = []
+            for attachment in attachments:
+                if isinstance(attachment, dict) and attachment.get("fid"):
+                    file_doc = frappe.get_doc("File", attachment["fid"])
+                    file_content = file_doc.get_content()
+
+                    if file_content:
+                        if isinstance(file_content, str):
+                            file_content = file_content.encode()
+
+                        encoded_content = base64.b64encode(file_content).decode()
+                        graph_attachments.append({
+                            "@odata.type": "#microsoft.graph.fileAttachment",
+                            "name": file_doc.file_name,
+                            "contentType": file_doc.file_type or "application/octet-stream",
+                            "contentBytes": encoded_content
+                        })
+
+            return graph_attachments
+
+        except Exception:
+            frappe.log_error(
+                title="Mail 365: Build Attachments Error",
+                message=frappe.get_traceback(),
+                reference_doctype="Email Account",
+                reference_name=self.name
+            )
+            return []
