@@ -86,12 +86,12 @@ app_license = "mit"
 # ------------
 
 # before_install = "frappe_mail_365.install.before_install"
-# after_install = "frappe_mail_365.install.after_install"
+after_install = "frappe_mail_365.setup.install.after_install"
 
 # Uninstallation
 # ------------
 
-# before_uninstall = "frappe_mail_365.uninstall.before_uninstall"
+before_uninstall = "frappe_mail_365.setup.uninstall.before_uninstall"
 # after_uninstall = "frappe_mail_365.uninstall.after_uninstall"
 
 # Integration Setup
@@ -170,9 +170,9 @@ app_license = "mit"
 # ------------------------------
 #
 # Specify custom mixins to extend the standard doctype controller.
-# extend_doctype_class = {
-# 	"Task": "frappe_mail_365.custom.task.CustomTaskMixin"
-# }
+extend_doctype_class = {
+    "Email Account": "frappe_mail_365.overrides.email_account.Mail365EmailAccount",
+}
 
 # Overriding Methods
 # ------------------------------
