@@ -489,31 +489,75 @@ class Mail365EmailAccount(EmailAccount):
 
     def _send_reply_email(self, graph_message_id, email_data, access_token):
         """
-        Send reply using Graph API POST /me/messages/{id}/reply endpoint.
-
-        This maintains email threading in Outlook/Graph API.
+        Send reply using createReply draft process:
+        1. POST /messages/{id}/createReply - Create draft
+        2. PATCH /messages/{draft_id} - Update body/recipients
+        3. POST /messages/{draft_id}/attachments - Add attachments (if any)
+        4. POST /messages/{draft_id}/send - Send
         """
-        url = f"{GRAPH_API_BASE}/me/messages/{graph_message_id}/reply"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
 
-        payload = {
-            "message": {
-                "toRecipients": self._build_recipients(email_data.get("recipients", ""))
+        create_url = f"{GRAPH_API_BASE}/me/messages/{graph_message_id}/createReply"
+        response = requests.post(create_url, headers=headers, timeout=REQUEST_TIMEOUT)
+
+        if response.status_code != 201:
+            frappe.log_error(
+                title="Mail 365: Create Reply Draft Error",
+                message=f"Status: {response.status_code}\n{response.text}",
+                reference_doctype="Email Account",
+                reference_name=self.name
+            )
+            response.raise_for_status()
+
+        draft = response.json()
+        draft_id = draft.get("id")
+
+        patch_url = f"{GRAPH_API_BASE}/me/messages/{draft_id}"
+        patch_data = {
+            "body": {
+                "contentType": "HTML",
+                "content": email_data.get("message") or ""
             },
-            "comment": email_data.get("message") or ""
+            "toRecipients": self._build_recipients(email_data.get("recipients", ""))
         }
 
         if email_data.get("cc"):
-            payload["message"]["ccRecipients"] = self._build_recipients(email_data["cc"])
+            patch_data["ccRecipients"] = self._build_recipients(email_data["cc"])
 
-        response = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+        response = requests.patch(patch_url, headers=headers, json=patch_data, timeout=REQUEST_TIMEOUT)
+
+        if response.status_code != 200:
+            frappe.log_error(
+                title="Mail 365: Update Reply Draft Error",
+                message=f"Status: {response.status_code}\n{response.text}",
+                reference_doctype="Email Account",
+                reference_name=self.name
+            )
+            response.raise_for_status()
+
+        attachments = self._build_attachments_for_send(email_data.get("attachments"))
+        if attachments:
+            attach_url = f"{GRAPH_API_BASE}/me/messages/{draft_id}/attachments"
+            for attachment in attachments:
+                response = requests.post(attach_url, headers=headers, json=attachment, timeout=REQUEST_TIMEOUT)
+
+                if response.status_code != 201:
+                    frappe.log_error(
+                        title="Mail 365: Add Attachment Error",
+                        message=f"Status: {response.status_code}\n{response.text}",
+                        reference_doctype="Email Account",
+                        reference_name=self.name
+                    )
+
+        send_url = f"{GRAPH_API_BASE}/me/messages/{draft_id}/send"
+        response = requests.post(send_url, headers=headers, timeout=REQUEST_TIMEOUT)
 
         if response.status_code != 202:
             frappe.log_error(
-                title="Mail 365: Reply Error",
+                title="Mail 365: Send Reply Error",
                 message=f"Status: {response.status_code}\n{response.text}",
                 reference_doctype="Email Account",
                 reference_name=self.name

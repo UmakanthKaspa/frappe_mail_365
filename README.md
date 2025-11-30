@@ -1,33 +1,38 @@
-### Frappe Mail 365
+# Frappe Mail 365
 
-Microsoft 365 email integration for Frappe using Graph API
+Send and receive emails in Frappe using Microsoft 365 Graph API instead of SMTP/IMAP.
 
-### Installation
+## Features
 
-You can install this app using the [bench](https://github.com/frappe/bench) CLI:
+- Send/Receive via Graph API
+- **Email Threading** - Replies from Frappe appear in the same thread in Outlook
 
-```bash
-cd $PATH_TO_YOUR_BENCH
-bench get-app $URL_OF_THIS_REPO --branch develop
-bench install-app frappe_mail_365
-```
-
-### Contributing
-
-This app uses `pre-commit` for code formatting and linting. Please [install pre-commit](https://pre-commit.com/#installation) and enable it for this repository:
+## Installation
 
 ```bash
-cd apps/frappe_mail_365
-pre-commit install
+bench get-app https://github.com/UmakanthKaspa/frappe_mail_365
+bench --site your-site install-app frappe_mail_365
 ```
 
-Pre-commit is configured to use the following tools for checking and formatting your code:
+## Setup
 
-- ruff
-- eslint
-- prettier
-- pyupgrade
+### Azure App
+Add these **Microsoft Graph** permissions (Delegated):
+- `Mail.Read`
+- `Mail.Send`
+- `Mail.ReadWrite`
+- `offline_access`
 
-### License
+### Connected App Scopes
+```
+https://graph.microsoft.com/Mail.Read
+https://graph.microsoft.com/Mail.ReadWrite
+offline_access
+```
 
-mit
+### Email Account
+Enable **"Use Microsoft 365 Graph API"** checkbox.
+
+## License
+
+MIT
