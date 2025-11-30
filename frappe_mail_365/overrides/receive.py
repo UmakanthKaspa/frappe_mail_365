@@ -24,7 +24,7 @@ class Mail365InboundMail(BaseInboundMail):
                 self._parent_communication = parent
                 return parent
 
-        return ""
+        return None
 
     def reference_document(self):
         """Find reference document using conversation's first email."""
@@ -52,7 +52,7 @@ class Mail365InboundMail(BaseInboundMail):
                     self._reference_document = ref_doc
                     return ref_doc
 
-        return ""
+        return None
 
     def as_dict(self):
         """Add Microsoft 365 fields to Communication data."""

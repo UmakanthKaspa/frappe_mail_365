@@ -1,3 +1,13 @@
+/**
+ * Add in_reply_to support for Microsoft 365 Graph API reply threading.
+ *
+ * This patches CommunicationComposer.send_email to inject parent Communication
+ * name when replying. The global frappe.call patch is safe because:
+ * 1. Only applied when in_reply_to exists (replying to an email)
+ * 2. Only modifies calls to "frappe.core.doctype.communication.email.make"
+ * 3. All other frappe.call invocations pass through unchanged
+ * 4. Original is restored immediately after send_email returns
+ */
 frappe.ready(function() {
     if (!frappe.views?.CommunicationComposer) return;
 

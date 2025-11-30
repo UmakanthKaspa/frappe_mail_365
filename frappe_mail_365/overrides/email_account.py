@@ -210,12 +210,13 @@ class Mail365EmailAccount(EmailAccount):
 
         return mails
 
-    # TODO: Works only for INBOX for now, need to improve for all folders
     def _get_append_to(self):
+        """Get append_to doctype for INBOX folder."""
         if self.use_imap and hasattr(self, "imap_folder"):
             for folder in self.imap_folder:
                 if folder.folder_name and folder.folder_name.upper() == "INBOX":
                     return folder.append_to
+        return None
 
     def _convert_to_email_format(self, msg, access_token):
         from email.mime.multipart import MIMEMultipart
