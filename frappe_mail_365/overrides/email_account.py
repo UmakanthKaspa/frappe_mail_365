@@ -15,35 +15,29 @@ class Mail365EmailAccount(EmailAccount):
     """Email Account with Microsoft 365 Graph API support."""
 
     def validate(self):
-        """Validate Graph API settings before saving."""
         if self._is_graph_api_enabled():
             self._validate_graph_settings()
         super().validate()
 
     def validate_smtp_conn(self):
-        """Skip SMTP validation for Graph API."""
         if self._is_graph_api_enabled():
             return None
         return super().validate_smtp_conn()
 
     def validate_imap(self):
-        """Skip IMAP validation for Graph API."""
         if self._is_graph_api_enabled():
             return None
         return super().validate_imap()
 
     def get_incoming_server(self, *args, **kwargs):
-        """Skip IMAP server setup for Graph API."""
         if self._is_graph_api_enabled():
             return None
         return super().get_incoming_server(*args, **kwargs)
 
     def _is_graph_api_enabled(self):
-        """Check if Graph API is enabled."""
         return bool(getattr(self, "use_graph_api", 0))
 
     def _validate_graph_settings(self):
-        """Validate OAuth configuration for Graph API."""
         if self.auth_method != "OAuth":
             frappe.throw(_("Microsoft 365 Graph API requires OAuth authentication."))
 
@@ -51,7 +45,6 @@ class Mail365EmailAccount(EmailAccount):
             frappe.throw(_("Please select a Connected App for Microsoft 365."))
 
     def _get_oauth_token(self):
-        """Get valid OAuth access token from Connected App."""
         try:
             if self.auth_method != "OAuth" or not self.connected_app:
                 return None
@@ -69,13 +62,11 @@ class Mail365EmailAccount(EmailAccount):
             return None
 
     def get_inbound_mails(self):
-        """Override to use Graph API instead of IMAP."""
         if self._is_graph_api_enabled():
             return self._fetch_from_graph_api()
         return super().get_inbound_mails()
 
     def _fetch_from_graph_api(self):
-        """Fetch emails from Microsoft 365 Graph API."""
         if not self.enable_incoming:
             return []
 
@@ -111,7 +102,6 @@ class Mail365EmailAccount(EmailAccount):
         return mails
 
     def _call_inbox_api(self, access_token):
-        """Call Microsoft 365 Graph API to get inbox emails."""
         headers = {"Authorization": f"Bearer {access_token}"}
 
         params = {
@@ -163,7 +153,6 @@ class Mail365EmailAccount(EmailAccount):
         return response.json().get("value", [])
 
     def _get_existing_ids(self, messages):
-        """Get message IDs that already exist in Communication."""
         message_ids = [
             msg.get("internetMessageId", "").strip("<>")
             for msg in messages
@@ -223,14 +212,12 @@ class Mail365EmailAccount(EmailAccount):
 
     # TODO: Works only for INBOX for now, need to improve for all folders
     def _get_append_to(self):
-        """Get doctype to link emails to."""
         if self.use_imap and hasattr(self, "imap_folder"):
             for folder in self.imap_folder:
                 if folder.folder_name and folder.folder_name.upper() == "INBOX":
                     return folder.append_to
 
     def _convert_to_email_format(self, msg, access_token):
-        """Convert Microsoft 365 JSON to RFC822 email format."""
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
 
@@ -341,7 +328,6 @@ class Mail365EmailAccount(EmailAccount):
             )
 
     def send_via_graph_api(self, email_data):
-        """Send email via Microsoft 365 Graph API."""
         if not self.enable_outgoing:
             frappe.throw(_("Outgoing email not enabled for this account."))
 
@@ -351,10 +337,13 @@ class Mail365EmailAccount(EmailAccount):
 
         access_token = token_doc.get_password("access_token")
 
+        is_reply, graph_message_id = self._is_reply_email(email_data)
+        if is_reply and graph_message_id:
+            return self._send_reply_email(graph_message_id, email_data, access_token)
+
         return self._send_new_email(email_data, access_token)
 
     def _send_new_email(self, email_data, access_token):
-        """Send new email via Graph API POST /me/sendMail."""
         message = {
             "message": {
                 "subject": email_data.get("subject") or "No Subject",
@@ -459,3 +448,75 @@ class Mail365EmailAccount(EmailAccount):
                 reference_name=self.name
             )
             return []
+
+    def _is_reply_email(self, email_data):
+        """
+        Check if email is a reply by looking at Communication.in_reply_to.
+
+        Flow:
+        - email_data.communication = current Communication (COMM-002)
+        - COMM-002.in_reply_to = parent Communication (COMM-001)
+        - COMM-001.graph_message_id = Graph API message ID for /reply
+
+        Returns (is_reply: bool, graph_message_id: str or None)
+        """
+        communication_name = email_data.get("communication")
+        if not communication_name:
+            return False, None
+
+        try:
+            comm = frappe.get_doc("Communication", communication_name)
+
+            if not comm.in_reply_to:
+                return False, None
+
+            parent = frappe.get_doc("Communication", comm.in_reply_to)
+            graph_message_id = getattr(parent, "graph_message_id", None)
+
+            if graph_message_id:
+                return True, graph_message_id
+
+        except Exception:
+            frappe.log_error(
+                title="Mail 365: Reply Detection Error",
+                message=frappe.get_traceback(),
+                reference_doctype="Email Account",
+                reference_name=self.name
+            )
+
+        return False, None
+
+    def _send_reply_email(self, graph_message_id, email_data, access_token):
+        """
+        Send reply using Graph API POST /me/messages/{id}/reply endpoint.
+
+        This maintains email threading in Outlook/Graph API.
+        """
+        url = f"{GRAPH_API_BASE}/me/messages/{graph_message_id}/reply"
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "message": {
+                "toRecipients": self._build_recipients(email_data.get("recipients", ""))
+            },
+            "comment": email_data.get("message") or ""
+        }
+
+        if email_data.get("cc"):
+            payload["message"]["ccRecipients"] = self._build_recipients(email_data["cc"])
+
+        response = requests.post(url, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+
+        if response.status_code != 202:
+            frappe.log_error(
+                title="Mail 365: Reply Error",
+                message=f"Status: {response.status_code}\n{response.text}",
+                reference_doctype="Email Account",
+                reference_name=self.name
+            )
+            response.raise_for_status()
+
+        return True
