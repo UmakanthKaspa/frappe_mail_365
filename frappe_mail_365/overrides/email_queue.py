@@ -38,6 +38,7 @@ class Mail365EmailQueue(EmailQueue):
                 "cc": cc_str if cc_str else None,
                 "message": body or self.message,
                 "attachments": self.attachments,
+                "communication": self.communication,
             })
 
             email_account_doc.send_via_graph_api(email_data)
